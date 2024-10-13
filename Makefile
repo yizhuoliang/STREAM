@@ -1,22 +1,18 @@
-CC = gcc
-CFLAGS = -O2 -fopenmp
+ROOT_PATH = /home/yliang/llvm14-ldb
+CC = $(ROOT_PATH)/build/bin/clang
+LIBLDB = $(ROOT_PATH)/libldb/libldb.a
 
-FC = gfortran
-FFLAGS = -O2 -fopenmp
+# Compiler flags
+CFLAGS = -g -O3 -fno-omit-frame-pointer -fdebug-default-version=3 \
+         -I$(ROOT_PATH)/build/lib -I$(ROOT_PATH)/libldb/include
 
-all: stream_f.exe stream_c.exe
+LDFLAGS = -lpthread
 
-stream_f.exe: stream.f mysecond.o
-	$(CC) $(CFLAGS) -c mysecond.c
-	$(FC) $(FFLAGS) -c stream.f
-	$(FC) $(FFLAGS) stream.o mysecond.o -o stream_f.exe
+# Target executable
+all: stream_c.exe
 
-stream_c.exe: stream.c
-	$(CC) $(CFLAGS) stream.c -o stream_c.exe
+stream_c.exe: stream.c $(LIBLDB)
+	$(CC) $(CFLAGS) stream.c $(LIBLDB) $(LDFLAGS) -o stream_c.exe
 
 clean:
-	rm -f stream_f.exe stream_c.exe *.o
-
-# an example of a more complex build line for the Intel icc compiler
-stream.icc: stream.c
-	icc -O3 -xCORE-AVX2 -ffreestanding -qopenmp -DSTREAM_ARRAY_SIZE=80000000 -DNTIMES=20 stream.c -o stream.omp.AVX2.80M.20x.icc
+	rm -f stream_c.exe *.o
