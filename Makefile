@@ -9,10 +9,10 @@ CFLAGS = -g -O3 -fno-omit-frame-pointer -fdebug-default-version=3 \
 LDFLAGS = -lpthread
 
 # Target executable
-all: stream_c.exe
+all: stream
 
-stream_c.exe: stream.c $(LIBLDB)
-	$(CC) $(CFLAGS) stream.c $(LIBLDB) $(LDFLAGS) -o stream_c.exe
+stream: stream.c $(LIBLDB)
+	$(CC) $(CFLAGS) stream.c $(LIBLDB) $(LDFLAGS) -o stream
 
 clean:
-	rm -f stream_c.exe *.o
+	rm -f stream *.o
