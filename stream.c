@@ -4,6 +4,7 @@
 #include <sys/time.h>
 #include <string.h>
 #include <unistd.h>
+#include <math.h>
 
 #ifndef STREAM_TYPE
 #define STREAM_TYPE double
@@ -27,11 +28,16 @@ typedef struct {
     STREAM_TYPE scalar;
 } thread_data_t;
 
+/* Global variables for timing and completion times */
+struct timeval start_time;
+double *thread_completion_times;
+
 /* Function prototypes with noinline attribute */
 __attribute__((noinline)) void array_copy(ssize_t start, ssize_t end);
 __attribute__((noinline)) void array_scale(ssize_t start, ssize_t end, STREAM_TYPE scalar);
 __attribute__((noinline)) void array_add(ssize_t start, ssize_t end);
 __attribute__((noinline)) void array_triad(ssize_t start, ssize_t end, STREAM_TYPE scalar);
+void validate(ssize_t start, ssize_t end, operation_t operation, STREAM_TYPE scalar);
 
 void *thread_function(void *arg);
 
@@ -109,6 +115,13 @@ int main(int argc, char *argv[]) {
         c[j] = 0.0;
     }
 
+    // Allocate thread completion times array
+    thread_completion_times = (double *) malloc(sizeof(double) * num_threads);
+    if (thread_completion_times == NULL) {
+        fprintf(stderr, "Failed to allocate thread completion times array\n");
+        exit(EXIT_FAILURE);
+    }
+
     // Create threads
     pthread_t *threads = (pthread_t *) malloc(sizeof(pthread_t) * num_threads);
     thread_data_t *thread_data = (thread_data_t *) malloc(sizeof(thread_data_t) * num_threads);
@@ -125,8 +138,6 @@ int main(int argc, char *argv[]) {
     // Divide iterations among threads
     int iterations_per_thread = num_iterations / num_threads;
     int iterations_remainder = num_iterations % num_threads;
-
-    struct timeval start_time, end_time;
 
     gettimeofday(&start_time, NULL);
 
@@ -150,10 +161,30 @@ int main(int argc, char *argv[]) {
         pthread_join(threads[i], NULL);
     }
 
-    gettimeofday(&end_time, NULL);
+    // Calculate total elapsed time
+    double max_elapsed_time = 0.0;
+    for (i = 0; i < num_threads; i++) {
+        if (thread_completion_times[i] > max_elapsed_time) {
+            max_elapsed_time = thread_completion_times[i];
+        }
+    }
 
-    double elapsed_time = ((end_time.tv_sec - start_time.tv_sec) * 1000000.0 +
-                           (end_time.tv_usec - start_time.tv_usec)) / 1000000.0;
+    // Calculate total bytes moved
+    int num_arrays_accessed;
+    switch (operation) {
+        case OP_COPY:
+        case OP_SCALE:
+            num_arrays_accessed = 2;
+            break;
+        case OP_ADD:
+        case OP_TRIAD:
+            num_arrays_accessed = 3;
+            break;
+        default:
+            num_arrays_accessed = 0; // Should not happen
+            break;
+    }
+    ssize_t total_bytes_moved = (ssize_t)num_iterations * num_arrays_accessed * array_size * sizeof(STREAM_TYPE);
 
     // Report results
     printf("Operation: %s\n", (operation == OP_COPY) ? "Copy" :
@@ -163,8 +194,8 @@ int main(int argc, char *argv[]) {
     printf("Array size: %zd\n", array_size);
     printf("Iterations per thread: %d\n", iterations_per_thread);
     printf("Total iterations: %d\n", num_iterations);
-    printf("Elapsed time: %f seconds\n", elapsed_time);
-    printf("Bandwidth: %f MB/s\n", (double)(array_size * sizeof(STREAM_TYPE) * num_iterations * 1.0e-6) / elapsed_time);
+    printf("Elapsed time: %f seconds\n", max_elapsed_time);
+    printf("Bandwidth: %f bytes/us\n", total_bytes_moved / (max_elapsed_time * 1e6));
 
     // Clean up
     free(a);
@@ -172,6 +203,7 @@ int main(int argc, char *argv[]) {
     free(c);
     free(threads);
     free(thread_data);
+    free(thread_completion_times);
 
     return 0;
 }
@@ -204,7 +236,52 @@ __attribute__((noinline)) void array_triad(ssize_t start, ssize_t end, STREAM_TY
     }
 }
 
+void validate(ssize_t start, ssize_t end, operation_t operation, STREAM_TYPE scalar) {
+    const double epsilon = 1e-6;
+    ssize_t j;
+    switch (operation) {
+        case OP_COPY:
+            for (j = start; j < end; j++) {
+                if (fabs(c[j] - a[j]) > epsilon) {
+                    fprintf(stderr, "Validation failed at index %zd: c[%zd]=%f != a[%zd]=%f\n", j, j, c[j], j, a[j]);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            break;
+        case OP_SCALE:
+            for (j = start; j < end; j++) {
+                if (fabs(b[j] - scalar * c[j]) > epsilon) {
+                    fprintf(stderr, "Validation failed at index %zd: b[%zd]=%f != scalar*c[%zd]=%f\n", j, j, b[j], j, scalar * c[j]);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            break;
+        case OP_ADD:
+            for (j = start; j < end; j++) {
+                if (fabs(c[j] - (a[j] + b[j])) > epsilon) {
+                    fprintf(stderr, "Validation failed at index %zd: c[%zd]=%f != a[%zd]+b[%zd]=%f\n", j, j, c[j], j, j, a[j] + b[j]);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            break;
+        case OP_TRIAD:
+            for (j = start; j < end; j++) {
+                if (fabs(a[j] - (b[j] + scalar * c[j])) > epsilon) {
+                    fprintf(stderr, "Validation failed at index %zd: a[%zd]=%f != b[%zd]+scalar*c[%zd]=%f\n", j, j, a[j], j, j, b[j] + scalar * c[j]);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            break;
+        default:
+            fprintf(stderr, "Unknown operation in validation\n");
+            exit(EXIT_FAILURE);
+    }
+}
+
 void *thread_function(void *arg) {
+    extern struct timeval start_time;
+    extern double *thread_completion_times;
+    struct timeval current_time;
     thread_data_t *data = (thread_data_t *)arg;
     int i;
     for (i = 0; i < data->num_iterations; i++) {
@@ -226,5 +303,14 @@ void *thread_function(void *arg) {
                 pthread_exit(NULL);
         }
     }
+
+    // Record completion time
+    gettimeofday(&current_time, NULL);
+    double elapsed_time = (current_time.tv_sec - start_time.tv_sec) + (current_time.tv_usec - start_time.tv_usec) / 1e6;
+    thread_completion_times[data->thread_id] = elapsed_time;
+
+    // Validation pass
+    validate(data->start_index, data->end_index, data->operation, data->scalar);
+
     pthread_exit(NULL);
 }
