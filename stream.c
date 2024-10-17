@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <math.h>
 
+#include "hrperf_api.h"
+
 #ifndef STREAM_TYPE
 #define STREAM_TYPE double
 #endif
@@ -139,6 +141,8 @@ int main(int argc, char *argv[]) {
     int iterations_per_thread = num_iterations / num_threads;
     int iterations_remainder = num_iterations % num_threads;
 
+	hrperf_start();
+
     gettimeofday(&start_time, NULL);
 
     int i;
@@ -160,6 +164,8 @@ int main(int argc, char *argv[]) {
     for (i = 0; i < num_threads; i++) {
         pthread_join(threads[i], NULL);
     }
+
+	hrperf_pause();
 
     // Calculate total elapsed time
     double max_elapsed_time = 0.0;
