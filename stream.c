@@ -177,31 +177,35 @@ int main(int argc, char *argv[]) {
 
     // Calculate total bytes moved
     int num_arrays_accessed;
-    switch (operation) {
-        case OP_COPY:
-        case OP_SCALE:
-            num_arrays_accessed = 2;
-            break;
-        case OP_ADD:
-        case OP_TRIAD:
-            num_arrays_accessed = 3;
-            break;
-        default:
-            num_arrays_accessed = 0; // Should not happen
-            break;
-    }
-    ssize_t total_bytes_moved = (ssize_t)num_iterations * num_arrays_accessed * array_size * sizeof(STREAM_TYPE);
+	switch (operation) {
+		case OP_COPY:
+		case OP_SCALE:
+			num_arrays_accessed = 2;  // Each iteration touches two arrays
+			break;
+		case OP_ADD:
+		case OP_TRIAD:
+			num_arrays_accessed = 3;  // Each iteration touches three arrays
+			break;
+		default:
+			num_arrays_accessed = 0;  // Should not happen
+			break;
+	}
 
-    // Report results
-    printf("Operation: %s\n", (operation == OP_COPY) ? "Copy" :
-                               (operation == OP_SCALE) ? "Scale" :
-                               (operation == OP_ADD) ? "Add" : "Triad");
-    printf("Threads: %d\n", num_threads);
-    printf("Array size: %zd\n", array_size);
-    printf("Iterations per thread: %d\n", iterations_per_thread);
-    printf("Total iterations: %d\n", num_iterations);
-    printf("Elapsed time: %f seconds\n", max_elapsed_time);
-    printf("Bandwidth: %f bytes/us\n", total_bytes_moved / (max_elapsed_time * 1e6));
+	// Calculate total bytes moved: 
+	// (num_threads × iterations per thread) × num_arrays_accessed × array_size × sizeof(STREAM_TYPE)
+	ssize_t total_bytes_moved = (ssize_t)(num_threads * iterations_per_thread) * 
+								num_arrays_accessed * array_size * sizeof(STREAM_TYPE);
+
+	// Report results
+	printf("Operation: %s\n", (operation == OP_COPY) ? "Copy" :
+							(operation == OP_SCALE) ? "Scale" :
+							(operation == OP_ADD) ? "Add" : "Triad");
+	printf("Threads: %d\n", num_threads);
+	printf("Array size: %zd\n", array_size);
+	printf("Iterations per thread: %d\n", iterations_per_thread);
+	printf("Total iterations: %d\n", num_iterations);
+	printf("Elapsed time: %f seconds\n", max_elapsed_time);
+	printf("Bandwidth: %f bytes/us\n", total_bytes_moved / (max_elapsed_time * 1e6));
 
     // Clean up
     free(a);
