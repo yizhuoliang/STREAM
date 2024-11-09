@@ -310,7 +310,7 @@ void *thread_function(void *arg) {
                 break;
             default:
                 fprintf(stderr, "Unknown operation\n");
-                pthread_exit(NULL);
+                return(NULL);
         }
     }
 
@@ -322,5 +322,5 @@ void *thread_function(void *arg) {
     // Validation pass
     validate(data->start_index, data->end_index, data->operation, data->scalar);
 
-    pthread_exit(NULL);
+    return(NULL);
 }

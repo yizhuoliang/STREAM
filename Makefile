@@ -6,7 +6,7 @@ LIBLDB = $(ROOT_PATH)/libldb/libldb.a
 CFLAGS = -g -O3 -fno-omit-frame-pointer -fdebug-default-version=3 \
          -I$(ROOT_PATH)/build/lib -I$(ROOT_PATH)/libldb/include
 
-LDFLAGS = -lpthread
+LDFLAGS = -lpthread -rdynamic
 
 # Target executable
 all: stream
