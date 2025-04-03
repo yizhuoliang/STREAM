@@ -25,9 +25,12 @@ typedef struct {
     int thread_id;
     ssize_t start_index;
     ssize_t end_index;
-    int num_iterations;
+    int num_iterations;     /* Used in fixed iteration mode */
     operation_t operation;
     STREAM_TYPE scalar;
+    int runtime_mode;       /* Flag for runtime mode */
+    double runtime_seconds; /* Runtime in seconds (for runtime mode) */
+    int *total_iterations;  /* Pointer to track iterations (for runtime mode) */
 } thread_data_t;
 
 /* Global variables for timing and completion times */
@@ -49,9 +52,13 @@ int main(int argc, char *argv[]) {
     int num_iterations = 10;
     operation_t operation = OP_COPY;
     STREAM_TYPE scalar = 3.0;
+    int use_hrperf = 0;    /* New flag for hrperf toggle */
+    int silent_mode = 0;   /* New flag for silent mode */
+    int runtime_mode = 0;  /* Flag for runtime mode */
+    double runtime_seconds = 0.0; /* Runtime in seconds */
 
     int opt;
-    while ((opt = getopt(argc, argv, "n:s:i:o:c:")) != -1) {
+    while ((opt = getopt(argc, argv, "n:s:i:o:c:pqr:")) != -1) {
         switch (opt) {
             case 'n':
                 num_threads = atoi(optarg);
@@ -79,8 +86,25 @@ int main(int argc, char *argv[]) {
             case 'c':
                 scalar = atof(optarg);
                 break;
+            case 'p':       /* New option for hrperf toggle */
+                use_hrperf = 1;
+                break;
+            case 'q':       /* New option for silent mode */
+                silent_mode = 1;
+                break;
+            case 'r':       /* New option for runtime mode */
+                runtime_mode = 1;
+                runtime_seconds = atof(optarg);
+                if (runtime_seconds <= 0) {
+                    fprintf(stderr, "Runtime must be positive\n");
+                    exit(EXIT_FAILURE);
+                }
+                break;
             default:
-                fprintf(stderr, "Usage: %s -n num_threads -s array_size -i num_iterations -o operation -c scalar\n", argv[0]);
+                fprintf(stderr, "Usage: %s -n num_threads -s array_size -i num_iterations -o operation -c scalar [-p] [-q] [-r runtime_seconds]\n", argv[0]);
+                fprintf(stderr, "  -p: Use hrperf for performance measurement\n");
+                fprintf(stderr, "  -q: Silent mode (no output)\n");
+                fprintf(stderr, "  -r: Run for specified number of seconds instead of fixed iterations\n");
                 exit(EXIT_FAILURE);
         }
     }
@@ -137,11 +161,17 @@ int main(int argc, char *argv[]) {
     ssize_t chunk_size = array_size / num_threads;
     ssize_t remainder = array_size % num_threads;
 
-    // Divide iterations among threads
+    // Divide iterations among threads (for fixed iteration mode)
     int iterations_per_thread = num_iterations / num_threads;
     int iterations_remainder = num_iterations % num_threads;
+    
+    // Create counter for total iterations (used in runtime mode)
+    int total_iterations_completed = 0;
 
-	hrperf_start();
+    /* Start hrperf only if enabled */
+    if (use_hrperf) {
+        hrperf_start();
+    }
 
     gettimeofday(&start_time, NULL);
 
@@ -153,6 +183,9 @@ int main(int argc, char *argv[]) {
         thread_data[i].num_iterations = iterations_per_thread + (i < iterations_remainder ? 1 : 0);
         thread_data[i].operation = operation;
         thread_data[i].scalar = scalar;
+        thread_data[i].runtime_mode = runtime_mode;
+        thread_data[i].runtime_seconds = runtime_seconds;
+        thread_data[i].total_iterations = &total_iterations_completed;
         int rc = pthread_create(&threads[i], NULL, thread_function, (void *)&thread_data[i]);
         if (rc) {
             fprintf(stderr, "Error creating thread %d\n", i);
@@ -165,7 +198,10 @@ int main(int argc, char *argv[]) {
         pthread_join(threads[i], NULL);
     }
 
-	hrperf_pause();
+    /* Pause hrperf only if enabled */
+    if (use_hrperf) {
+        hrperf_pause();
+    }
 
     // Calculate total elapsed time
     double max_elapsed_time = 0.0;
@@ -177,35 +213,47 @@ int main(int argc, char *argv[]) {
 
     // Calculate total bytes moved
     int num_arrays_accessed;
-	switch (operation) {
-		case OP_COPY:
-		case OP_SCALE:
-			num_arrays_accessed = 2;  // Each iteration touches two arrays
-			break;
-		case OP_ADD:
-		case OP_TRIAD:
-			num_arrays_accessed = 3;  // Each iteration touches three arrays
-			break;
-		default:
-			num_arrays_accessed = 0;  // Should not happen
-			break;
-	}
+    switch (operation) {
+        case OP_COPY:
+        case OP_SCALE:
+            num_arrays_accessed = 2;  // Each iteration touches two arrays
+            break;
+        case OP_ADD:
+        case OP_TRIAD:
+            num_arrays_accessed = 3;  // Each iteration touches three arrays
+            break;
+        default:
+            num_arrays_accessed = 0;  // Should not happen
+            break;
+    }
 
-	// Calculate total bytes moved: 
-	// (num_threads × iterations per thread) × num_arrays_accessed × array_size × sizeof(STREAM_TYPE)
-	ssize_t total_bytes_moved = (ssize_t)(num_threads * iterations_per_thread) * 
-								num_arrays_accessed * array_size * sizeof(STREAM_TYPE);
+    // Get the actual number of iterations performed
+    int actual_iterations = runtime_mode ? total_iterations_completed : num_iterations;
+    
+    // Calculate total bytes moved: 
+    // (actual iterations) × num_arrays_accessed × array_size × sizeof(STREAM_TYPE)
+    ssize_t total_bytes_moved = (ssize_t)(actual_iterations) * 
+                              num_arrays_accessed * array_size * sizeof(STREAM_TYPE);
 
-	// Report results
-	printf("Operation: %s\n", (operation == OP_COPY) ? "Copy" :
-							(operation == OP_SCALE) ? "Scale" :
-							(operation == OP_ADD) ? "Add" : "Triad");
-	printf("Threads: %d\n", num_threads);
-	printf("Array size: %zd\n", array_size);
-	printf("Iterations per thread: %d\n", iterations_per_thread);
-	printf("Total iterations: %d\n", num_iterations);
-	printf("Elapsed time: %f seconds\n", max_elapsed_time);
-	printf("Bandwidth: %f bytes/us\n", total_bytes_moved / (max_elapsed_time * 1e6));
+    // Report results only if not in silent mode
+    if (!silent_mode) {
+        printf("Operation: %s\n", (operation == OP_COPY) ? "Copy" :
+                              (operation == OP_SCALE) ? "Scale" :
+                              (operation == OP_ADD) ? "Add" : "Triad");
+        printf("Threads: %d\n", num_threads);
+        printf("Array size: %zd\n", array_size);
+        if (runtime_mode) {
+            printf("Runtime mode: %g seconds\n", runtime_seconds);
+            printf("Total iterations completed: %d\n", total_iterations_completed);
+        } else {
+            printf("Iterations per thread: %d\n", iterations_per_thread);
+            printf("Total iterations: %d\n", num_iterations);
+        }
+        printf("Elapsed time: %f seconds\n", max_elapsed_time);
+        
+        // Corrected bandwidth calculation to report in MB/s
+        printf("Bandwidth: %f MB/s\n", (total_bytes_moved / 1e6) / max_elapsed_time);
+    }
 
     // Clean up
     free(a);
@@ -293,24 +341,66 @@ void *thread_function(void *arg) {
     extern double *thread_completion_times;
     struct timeval current_time;
     thread_data_t *data = (thread_data_t *)arg;
-    int i;
-    for (i = 0; i < data->num_iterations; i++) {
-        switch (data->operation) {
-            case OP_COPY:
-                array_copy(data->start_index, data->end_index);
+    int i = 0;
+    
+    if (data->runtime_mode) {
+        // Runtime mode: Run until time is up
+        double elapsed_time = 0.0;
+        
+        while (1) {
+            // Perform operation
+            switch (data->operation) {
+                case OP_COPY:
+                    array_copy(data->start_index, data->end_index);
+                    break;
+                case OP_SCALE:
+                    array_scale(data->start_index, data->end_index, data->scalar);
+                    break;
+                case OP_ADD:
+                    array_add(data->start_index, data->end_index);
+                    break;
+                case OP_TRIAD:
+                    array_triad(data->start_index, data->end_index, data->scalar);
+                    break;
+                default:
+                    fprintf(stderr, "Unknown operation\n");
+                    return(NULL);
+            }
+            
+            i++;
+            
+            // Check if runtime is reached
+            gettimeofday(&current_time, NULL);
+            elapsed_time = (current_time.tv_sec - start_time.tv_sec) + 
+                          (current_time.tv_usec - start_time.tv_usec) / 1e6;
+            
+            // Atomic increment of completed iterations - this is just a rough count
+            __sync_fetch_and_add(data->total_iterations, 1);
+            
+            if (elapsed_time >= data->runtime_seconds) {
                 break;
-            case OP_SCALE:
-                array_scale(data->start_index, data->end_index, data->scalar);
-                break;
-            case OP_ADD:
-                array_add(data->start_index, data->end_index);
-                break;
-            case OP_TRIAD:
-                array_triad(data->start_index, data->end_index, data->scalar);
-                break;
-            default:
-                fprintf(stderr, "Unknown operation\n");
-                return(NULL);
+            }
+        }
+    } else {
+        // Fixed iterations mode (original behavior)
+        for (i = 0; i < data->num_iterations; i++) {
+            switch (data->operation) {
+                case OP_COPY:
+                    array_copy(data->start_index, data->end_index);
+                    break;
+                case OP_SCALE:
+                    array_scale(data->start_index, data->end_index, data->scalar);
+                    break;
+                case OP_ADD:
+                    array_add(data->start_index, data->end_index);
+                    break;
+                case OP_TRIAD:
+                    array_triad(data->start_index, data->end_index, data->scalar);
+                    break;
+                default:
+                    fprintf(stderr, "Unknown operation\n");
+                    return(NULL);
+            }
         }
     }
 
